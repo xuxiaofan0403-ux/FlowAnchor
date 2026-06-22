@@ -1,6 +1,6 @@
 #!/bin/bash
 # FlowAnchor: Quick start script
-# Usage: bash run.sh <video_path> <src_prompt> <tgt_prompt> [mask_path]
+# Usage: bash run.sh <video_path> <src_prompt> <tgt_prompt> [mask_path] [frame_num]
 
 set -e
 
@@ -9,15 +9,17 @@ WAN_EDIT_DIR="${WAN_EDIT_DIR:-$SCRIPT_DIR/../FiVE-Bench/models/wan-edit}"
 CKPT_DIR="${CKPT_DIR:-$SCRIPT_DIR/checkpoints/Wan-AI/Wan2.1-T2V-1.3B}"
 
 if [ $# -lt 3 ]; then
-    echo "Usage: bash run.sh <video_path> <src_prompt> <tgt_prompt> [mask_path]"
+    echo "Usage: bash run.sh <video_path> <src_prompt> <tgt_prompt> [mask_path] [frame_num]"
     echo ""
     echo "Example:"
     echo "  bash run.sh data/my_video.mp4 'a red car' 'a blue car'"
     echo "  bash run.sh data/my_video.mp4 'a red car' 'a blue car' masks/car_mask.mp4"
+    echo "  bash run.sh data/my_video.mp4 'a red car' 'a blue car' '' 81  (81帧)"
     echo ""
     echo "Environment variables:"
     echo "  WAN_EDIT_DIR  - Path to wan-edit directory (default: ../FiVE-Bench/models/wan-edit)"
     echo "  CKPT_DIR      - Path to Wan model checkpoints (default: ./checkpoints/Wan-AI/Wan2.1-T2V-1.3B)"
+    echo "  FRAME_NUM     - Number of frames to process (default: 41)"
     exit 1
 fi
 
@@ -25,6 +27,7 @@ VIDEO_PATH="$1"
 SRC_PROMPT="$2"
 TGT_PROMPT="$3"
 MASK_PATH="${4:-}"
+FRAME_NUM="${5:-${FRAME_NUM:-41}}"
 
 echo "=== FlowAnchor: Inversion-Free Video Editing ==="
 echo "Source: $VIDEO_PATH"
@@ -57,6 +60,7 @@ python "$SCRIPT_DIR/edit_flowanchor.py" \
     --video_path "$VIDEO_PATH" \
     --prompt "$SRC_PROMPT" \
     --tgt_prompt "$TGT_PROMPT" \
+    --frame_num "$FRAME_NUM" \
     --save_dir "$SCRIPT_DIR/outputs" \
     --sample_steps 50 \
     --sample_shift 5.0 \

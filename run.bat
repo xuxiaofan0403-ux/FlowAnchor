@@ -3,14 +3,18 @@ chcp 65001 >nul
 setlocal enabledelayedexpansion
 
 REM FlowAnchor Windows 启动脚本
-REM 用法: run.bat <视频路径> <源提示词> <目标提示词> [遮罩路径]
+REM 用法: run.bat <视频路径> <源提示词> <目标提示词> [遮罩路径] [帧数]
 
 if "%~3"=="" (
-    echo 用法: run.bat ^<视频路径^> ^<源提示词^> ^<目标提示词^> [遮罩路径]
+    echo 用法: run.bat ^<视频路径^> ^<源提示词^> ^<目标提示词^> [遮罩路径] [帧数]
     echo.
     echo 示例:
     echo   run.bat data\car.mp4 "a red car" "a blue car"
     echo   run.bat data\car.mp4 "a red car" "a blue car" masks\car_mask.mp4
+    echo   run.bat data\car.mp4 "a red car" "a blue car" "" 81
+    echo.
+    echo 环境变量:
+    echo   FRAME_NUM   - 要处理的帧数 (默认: 41^)
     exit /b 1
 )
 
@@ -24,6 +28,11 @@ set VIDEO_PATH=%~1
 set SRC_PROMPT=%~2
 set TGT_PROMPT=%~3
 set MASK_PATH=%~4
+
+REM 帧数: 第5个参数 > 环境变量 > 默认41
+set FRAME_NUM=%~5
+if "%FRAME_NUM%"=="" set FRAME_NUM=%FRAME_NUM%
+if "%FRAME_NUM%"=="" set FRAME_NUM=41
 
 echo === FlowAnchor: 视频编辑 ===
 echo 源视频: %VIDEO_PATH%
@@ -56,6 +65,7 @@ python "%SCRIPT_DIR%edit_flowanchor.py" ^
     --video_path "%VIDEO_PATH%" ^
     --prompt "%SRC_PROMPT%" ^
     --tgt_prompt "%TGT_PROMPT%" ^
+    --frame_num "%FRAME_NUM%" ^
     --save_dir "%SCRIPT_DIR%outputs" ^
     --sample_steps 50 ^
     --sample_shift 5.0 ^

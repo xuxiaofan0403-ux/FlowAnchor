@@ -25,8 +25,12 @@ from wan.configs import WAN_CONFIGS, SIZE_CONFIGS
 from wan.utils.utils import cache_video, str2bool
 from flowanchor import FlowAnchorEditor
 
+# ---- 可配置常量 ----
+DEFAULT_FRAME_NUM = 41      # 默认处理帧数，可通过 --frame_num 覆盖
+# --------------------
 
-def load_frames(video_path=None, num_frames=41, target_size=(832, 480)):
+
+def load_frames(video_path=None, num_frames=DEFAULT_FRAME_NUM, target_size=(832, 480)):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video file: {video_path}")
@@ -46,7 +50,7 @@ def load_frames(video_path=None, num_frames=41, target_size=(832, 480)):
     return torch.stack(frames).permute(1, 0, 2, 3).unsqueeze(0)
 
 
-def load_frames_path(video_path=None, num_frames=41, target_size=(832, 480)):
+def load_frames_path(video_path=None, num_frames=DEFAULT_FRAME_NUM, target_size=(832, 480)):
     frame_files = sorted([f for f in os.listdir(video_path)
                           if f.endswith(('.jpg', '.png'))])
     frames = []
@@ -313,7 +317,7 @@ def _parse_args():
     parser = argparse.ArgumentParser(description="FlowAnchor: Stable Inversion-Free Video Editing")
     parser.add_argument("--task", type=str, default="t2v-1.3B", choices=list(WAN_CONFIGS.keys()))
     parser.add_argument("--size", type=str, default="832*480", choices=list(SIZE_CONFIGS.keys()))
-    parser.add_argument("--frame_num", type=int, default=41)
+    parser.add_argument("--frame_num", type=int, default=DEFAULT_FRAME_NUM)
     parser.add_argument("--ckpt_dir", type=str, required=True)
     parser.add_argument("--offload_model", type=str2bool, default=True)
     parser.add_argument("--t5_cpu", action="store_true", default=False)
