@@ -55,20 +55,22 @@ EXTRA_ARGS=""
 export PYTHONPATH="$WAN_EDIT_DIR:$PYTHONPATH"
 
 python "$SCRIPT_DIR/edit_flowanchor.py" \
-    --task t2v-1.3B \
-    --ckpt_dir "$CKPT_DIR" \
-    --video_path "$VIDEO_PATH" \
-    --prompt "$SRC_PROMPT" \
-    --tgt_prompt "$TGT_PROMPT" \
-    --frame_num "$FRAME_NUM" \
-    --save_dir "$SCRIPT_DIR/outputs" \
-    --sample_steps 50 \
-    --sample_shift 5.0 \
-    --sample_guide_scale 5.0 \
-    --tgt_guide_scale 10.0 \
-    --skip_timesteps 16 \
-    --beta1 0.5 \
-    --beta2 0.5 \
-    --gamma_scale 1.0 \
+    --task t2v-1.3B \\模型是wan-edit的t2v-1.3B模型
+    --ckpt_dir "$CKPT_DIR" \\模型检查点目录
+    --video_path "$VIDEO_PATH" \\输入视频路径
+    --prompt "$SRC_PROMPT" \\源提示词
+    --tgt_prompt "$TGT_PROMPT" \\目标提示词
+    --frame_num "$FRAME_NUM" \\帧数
+    --save_dir "$SCRIPT_DIR/outputs" \\保存目录
+    --sample_steps 50 \\采样步骤数
+    --sample_shift 5.0 \\采样偏移量
+    --sample_guide_scale 5.0 \\采样引导比例
+    --tgt_guide_scale 10.0 \\目标引导比例
+    --skip_timesteps 16 \\跳过的时间步数
+    --beta1 0.5 \\Beta1参数文本调度强度
+    --beta2 0.5 \\Beta2参数空间调度强度
+    --gamma_scale 1.0 \\Gamma缩放参数,自适应幅度调度
     --offload_model True \
     $EXTRA_ARGS
+
+

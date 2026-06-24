@@ -23,7 +23,7 @@ import torch.cuda.amp as amp
 import wan
 from wan.configs import WAN_CONFIGS, SIZE_CONFIGS
 from wan.utils.utils import cache_video, str2bool
-from flowanchor import FlowAnchorEditor
+from flowanchor import FlowAnchorEditor, MultiSubjectFlowAnchorEditor
 
 # ---- 可配置常量 ----
 DEFAULT_FRAME_NUM = 41      # 默认处理帧数，可通过 --frame_num 覆盖
@@ -108,13 +108,21 @@ def load_mask(mask_path: str, num_frames: int, target_size: Tuple[int, int]) -> 
 
 
 class SARCrossAttentionHook:
-    """Hook that applies SAR refinement to cross-attention during forward pass."""
+    """Hook that applies SAR refinement to cross-attention during forward pass.
+
+    Supports multi-subject editing with three-category refinement:
+    - target tokens: boosted inside mask
+    - preserve tokens: protected from editing leakage
+    - other tokens: standard suppression
+    """
 
     def __init__(self, editor: FlowAnchorEditor, mask: torch.Tensor,
-                 target_indices: List[int]):
+                 target_indices: List[int],
+                 preserve_indices: Optional[List[int]] = None):
         self.editor = editor
         self.mask = mask
         self.target_indices = target_indices
+        self.preserve_indices = preserve_indices or []
         self.handles = []
 
     def register(self, model):
@@ -142,7 +150,10 @@ class SARCrossAttentionHook:
         ca_weights = torch.softmax(ca_weights, dim=-1)
 
         refined_ca = self.editor.spatial_aware_attention_refinement(
-            ca_weights, self.mask, self.target_indices)
+            ca_weights, self.mask,
+            target_indices=self.target_indices,
+            preserve_indices=self.preserve_indices,
+        )
 
         diff = refined_ca - ca_weights
         modulated_k = k + torch.einsum('bijn,bjnd->bjnd', diff, k)
@@ -177,7 +188,20 @@ def flowanchor_edit(
     beta2: float,
     gamma_scale: float,
     device: torch.device,
+    preserve_words: Optional[List[str]] = None,
+    multi_subject: bool = False,
+    beta_preserve: float = 0.3,
+    beta_cross: float = 0.2,
 ) -> torch.Tensor:
+    """
+    FlowAnchor video editing pipeline with multi-subject support.
+
+    Args:
+        preserve_words: words in src_prompt that should NOT be changed
+        multi_subject: enable multi-subject mode (auto-detect preserve words)
+        beta_preserve: suppression strength for preservation tokens (0-1)
+        beta_cross: cross-subject leakage suppression strength (0-1)
+    """
     F = frame_num
     video = video.to(device)
     latents = wan_pipeline.vae.encode(video)
@@ -208,15 +232,71 @@ def flowanchor_edit(
         context_tgt = [t.to(device) for t in wan_pipeline.text_encoder([tgt_prompt], torch.device('cpu'))]
         context_null = [t.to(device) for t in wan_pipeline.text_encoder([wan_pipeline.sample_neg_prompt], torch.device('cpu'))]
 
-    editor = FlowAnchorEditor(device=device, beta1=beta1, beta2=beta2, gamma_scale=gamma_scale)
+    editor = FlowAnchorEditor(
+        device=device, beta1=beta1, beta2=beta2,
+        gamma_scale=gamma_scale,
+        beta_preserve=beta_preserve,
+        beta_cross=beta_cross,
+    )
 
+    # ---- Multi-subject analysis ----
     target_token_indices = None
-    if target_words:
-        target_token_indices = editor.find_target_token_indices(tgt_prompt, target_words)
+    preserve_token_indices = None
+    is_multi = False
+
+    if multi_subject:
+        ms_editor = MultiSubjectFlowAnchorEditor(
+            device=device, beta1=beta1, beta2=beta2,
+            gamma_scale=gamma_scale,
+            beta_preserve=beta_preserve,
+            beta_cross=beta_cross,
+        )
+        # Try to get T5 tokenizer for accurate token matching
+        tokenizer = None
+        try:
+            if hasattr(wan_pipeline, 'text_encoder'):
+                te = wan_pipeline.text_encoder
+                if hasattr(te, 'tokenizer'):
+                    tokenizer = te.tokenizer
+        except Exception:
+            pass
+
+        analysis = ms_editor.analyze_multi_subject_prompt(
+            src_prompt, tgt_prompt, tokenizer)
+        is_multi = analysis['is_multi_subject']
+
+        if is_multi:
+            logging.info(f"Multi-subject scene detected: "
+                         f"{len(analysis['src_subjects'])} subjects")
+            logging.info(f"  Target words: {analysis['target_words']}")
+            logging.info(f"  Preserve words: {analysis['preserve_words']}")
+
+            if not target_words:
+                target_words = analysis['target_words']
+            if not preserve_words:
+                preserve_words = analysis['preserve_words']
+
+            target_token_indices = editor.find_target_token_indices(
+                tgt_prompt, target_words, tokenizer)
+            if preserve_words:
+                preserve_token_indices = editor.find_target_token_indices(
+                    src_prompt, preserve_words, tokenizer)
+                logging.info(f"  Preserve token indices: {preserve_token_indices}")
+        else:
+            logging.info("Single-subject scene detected, using standard SAR")
+
+    # Fallback: use user-provided target_words
+    if target_token_indices is None and target_words:
+        target_token_indices = editor.find_target_token_indices(
+            tgt_prompt, target_words)
         logging.info(f"SAR target token indices: {target_token_indices}")
 
-    mask_on_device = mask.to(device) if mask is not None else None
+    # Fallback: use user-provided preserve_words
+    if preserve_token_indices is None and preserve_words and not is_multi:
+        preserve_token_indices = editor.find_target_token_indices(
+            src_prompt, preserve_words)
 
+    mask_on_device = mask.to(device) if mask is not None else None
     use_sar = (target_token_indices is not None and mask_on_device is not None)
 
     @contextmanager
@@ -269,7 +349,11 @@ def flowanchor_edit(
 
             sar_hook = None
             if use_sar:
-                sar_hook = SARCrossAttentionHook(editor, mask_on_device, target_token_indices)
+                sar_hook = SARCrossAttentionHook(
+                    editor, mask_on_device,
+                    target_indices=target_token_indices,
+                    preserve_indices=preserve_token_indices,
+                )
                 sar_hook.register(wan_pipeline.model)
 
             noise_pred_cond_src = wan_pipeline.model(src_latent, t=timestep, **arg_src)[0]
@@ -290,7 +374,9 @@ def flowanchor_edit(
 
             if mask_on_device is not None:
                 delta_v = editor.adaptive_magnitude_modulation(
-                    delta_v, mask_on_device, target_shape[1])
+                    delta_v, mask_on_device, target_shape[1],
+                    per_region=is_multi,
+                )
 
             temp_x0 = sample_scheduler.step(
                 delta_v.unsqueeze(0), t,
@@ -330,6 +416,11 @@ def _parse_args():
     parser.add_argument("--tgt_prompt", type=str, required=True)
     parser.add_argument("--mask_path", type=str, default=None)
     parser.add_argument("--target_words", type=str, nargs='+', default=None)
+    parser.add_argument("--preserve_words", type=str, nargs='+', default=None,
+                        help="Words in source prompt to protect from editing")
+    parser.add_argument("--multi_subject", type=str2bool, default=True,
+                        help="Auto-detect multi-subject scenes and apply "
+                             "preservation anchors (default: True)")
     parser.add_argument("--sample_solver", type=str, default='unipc', choices=['unipc', 'dpm++'])
     parser.add_argument("--sample_steps", type=int, default=50)
     parser.add_argument("--sample_shift", type=float, default=5.0)
@@ -340,6 +431,12 @@ def _parse_args():
     parser.add_argument("--beta1", type=float, default=0.5)
     parser.add_argument("--beta2", type=float, default=0.5)
     parser.add_argument("--gamma_scale", type=float, default=1.0)
+    parser.add_argument("--beta_preserve", type=float, default=0.3,
+                        help="Preservation token suppression "
+                             "strength (0-1, default: 0.3)")
+    parser.add_argument("--beta_cross", type=float, default=0.2,
+                        help="Cross-subject leakage suppression "
+                             "strength (0-1, default: 0.2)")
     return parser.parse_args()
 
 
@@ -428,6 +525,10 @@ def main():
         beta2=args.beta2,
         gamma_scale=args.gamma_scale,
         device=torch.device(f"cuda:{device}"),
+        preserve_words=args.preserve_words,
+        multi_subject=args.multi_subject,
+        beta_preserve=args.beta_preserve,
+        beta_cross=args.beta_cross,
     )
 
     if rank == 0:
@@ -446,3 +547,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
